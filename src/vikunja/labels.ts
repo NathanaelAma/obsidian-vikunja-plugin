@@ -72,7 +72,18 @@ class Label implements VikunjaAPI {
 		const labelsInVikunjaExisting = labels.filter(label => label.title && this.labelsMap.has(label.title));
 		const labelsInVikunjaMissing = labels.filter(label => label.title && !this.labelsMap.has(label.title));
 
-		const createdLabel = await Promise.all(labelsInVikunjaMissing.map(label => this.createLabel(label)));
+		// Sequential on purpose: concurrent creation of the same title produced
+		// duplicate labels, because each call checks labelsMap before any create has
+		// landed. createLabel updates the map, so later iterations see earlier ones.
+		const createdLabel: ModelsLabel[] = [];
+		for (const label of labelsInVikunjaMissing) {
+			if (label.title && this.labelsMap.has(label.title)) {
+				// created by an earlier iteration of this same loop
+				createdLabel.push(this.labelsMap.get(label.title) as ModelsLabel);
+				continue;
+			}
+			createdLabel.push(await this.createLabel(label));
+		}
 		if (this.plugin.settings.debugging) console.log("LabelsAPI: Created labels", createdLabel);
 		const concatLabels = labelsInVikunjaExisting.concat(createdLabel);
 		if (this.plugin.settings.debugging) console.log("LabelsAPI: Returning labels", concatLabels);

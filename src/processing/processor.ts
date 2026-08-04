@@ -270,7 +270,34 @@ class Processor {
 	async pushTasksFromVaultToVikunja(localTasks: PluginTask[], vikunjaTasks: ModelsTask[]) {
 		const tasksToPushToVikunja = localTasks.filter(task => !vikunjaTasks.find(vikunjaTask => vikunjaTask.id === task.task.id));
 		if (this.plugin.settings.debugging) console.log("Step CreateTask: Pushing tasks to Vikunja and updates in Vault")
-		await Promise.all(tasksToPushToVikunja.map(task => this.createTaskAndUpdateToVault(task)));
+
+		// Pushed sequentially, deliberately.
+		//
+		// Promise.all raced on shared state: every task calls getOrCreateLabels, which
+		// checks an in-memory labelsMap, so N concurrent tasks sharing a tag all saw it
+		// missing and each created its own copy. That produced N duplicate labels, and
+		// the losers' lookups returned undefined and threw, which rejected the whole
+		// Promise.all and abandoned every task that had not finished yet. The symptom
+		// was a different random subset syncing on each run.
+		//
+		// A per-task try/catch also means one bad task no longer kills the batch.
+		const failures: {title: string, error: string}[] = [];
+		for (const task of tasksToPushToVikunja) {
+			try {
+				await this.createTaskAndUpdateToVault(task);
+			} catch (error: any) {
+				const title = task.task.title ?? "(untitled)";
+				failures.push({title, error: error?.message ?? String(error)});
+				console.error("Step CreateTask: Failed to push task", title, error);
+			}
+		}
+
+		if (failures.length > 0) {
+			new Notice(`Vikunja Plugin: ${failures.length} of ${tasksToPushToVikunja.length} task(s) failed to sync. See console.`);
+			console.error("Step CreateTask: Failed tasks", failures);
+		} else if (this.plugin.settings.debugging) {
+			console.log(`Step CreateTask: Pushed ${tasksToPushToVikunja.length} task(s) successfully`);
+		}
 	}
 
 	async pullTasksFromVikunjaToVault(localTasks: PluginTask[], vikunjaTasks: ModelsTask[]) {
