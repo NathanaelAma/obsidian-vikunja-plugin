@@ -122,8 +122,18 @@ class Tasks implements VikunjaAPI {
 			try {
 				if (this.plugin.settings.debugging) console.log("TasksApi: Adding label to task", param);
 				await this.plugin.labelsApi.labelsApi.tasksTaskLabelsPut(param);
-			} catch (error) {
-				if (this.plugin.settings.debugging) console.error("Error adding label to task, mostly because it is already there", error);
+			} catch (error: any) {
+				// Re-attaching a label the task already has returns 400. On every sync
+				// after the first that is the normal case, so treating it as an error
+				// filled the console with expected failures and made a genuine one
+				// impossible to spot. 400 is demoted to a debug line; anything else
+				// (401 permissions, 5xx, network) is still surfaced loudly.
+				const status = error?.response?.status;
+				if (status === 400) {
+					if (this.plugin.settings.debugging) console.log("TasksApi: Label already attached to task", task.id, label.title);
+				} else {
+					console.error("TasksApi: Failed to attach label", label.title, "to task", task.id, "status", status, error);
+				}
 			}
 		}
 	}
