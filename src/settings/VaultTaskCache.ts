@@ -67,12 +67,19 @@ export default class VaultTaskCache {
 	async reindex() {
 		const cache = new Map<number, PluginTask>();
 		const tasks = await this.plugin.processor.getVaultSearcher().getTasks(this.plugin.processor.getTaskParser());
+		// A vault task without an id simply has not been pushed to Vikunja yet, which
+		// is the normal state for anything new and for every task right after the
+		// markers are stripped. Throwing here made the command unusable in exactly the
+		// situation it exists for: rebuilding a cache that has gone stale.
+		let skipped = 0;
 		tasks.map(task => {
 			if (task.task.id === undefined) {
-				throw new Error("VaultTaskCache: Task id is not defined");
+				skipped++;
+				return;
 			}
 			cache.set(task.task.id, task);
 		})
+		if (this.plugin.settings.debugging) console.log(`VaultTaskCache: reindexed ${cache.size} task(s), skipped ${skipped} not yet synced`);
 		this.cache = cache;
 		this.changesMade = true;
 		await this.saveCacheToDisk();
