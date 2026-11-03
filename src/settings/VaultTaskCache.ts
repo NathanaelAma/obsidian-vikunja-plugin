@@ -67,12 +67,19 @@ export default class VaultTaskCache {
 	async reindex() {
 		const cache = new Map<number, PluginTask>();
 		const tasks = await this.plugin.processor.getVaultSearcher().getTasks(this.plugin.processor.getTaskParser());
+		// A vault task without an id simply has not been pushed to Vikunja yet, which
+		// is the normal state for anything new and for every task right after the
+		// markers are stripped. Throwing here made the command unusable in exactly the
+		// situation it exists for: rebuilding a cache that has gone stale.
+		let skipped = 0;
 		tasks.map(task => {
 			if (task.task.id === undefined) {
-				throw new Error("VaultTaskCache: Task id is not defined");
+				skipped++;
+				return;
 			}
 			cache.set(task.task.id, task);
 		})
+		if (this.plugin.settings.debugging) console.log(`VaultTaskCache: reindexed ${cache.size} task(s), skipped ${skipped} not yet synced`);
 		this.cache = cache;
 		this.changesMade = true;
 		await this.saveCacheToDisk();
@@ -96,7 +103,9 @@ export default class VaultTaskCache {
 		}
 
 		const cachedTask = this.get(local.task.id);
-		const currentDate = moment().format("YYYY-MM-DDTHH:mm:ss[Z]");
+		// .utc() for the same reason as dataviewSearcher.ts: the "[Z]" literal was
+		// labelling local time as UTC.
+		const currentDate = moment().utc().format("YYYY-MM-DDTHH:mm:ss[Z]");
 		if (cachedTask !== undefined && !cachedTask.isTaskEqual(local.task)) {
 			if (this.plugin.settings.debugging) console.log("VaultTaskCache: Updating task", local.task.id, "with updated date", currentDate);
 			local.task.updated = currentDate;

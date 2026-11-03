@@ -24,6 +24,11 @@ class Processor {
 	private alreadyUpdateTasksOnStartup = false;
 	private lastLineChecked: Map<string, number>;
 	private automaton: Automaton;
+	private syncing = false;
+
+	public isSyncing(): boolean {
+		return this.syncing;
+	}
 
 	constructor(app: App, plugin: Plugin) {
 		this.app = app;
@@ -40,11 +45,17 @@ class Processor {
 	* The main method to sync tasks between Vikunja and Obsidian.
 	 */
 	async exec() {
+		if (this.syncing) {
+			if (this.plugin.settings.debugging) console.log("Processor: Already syncing, skip");
+			return;
+		}
+		this.syncing = true;
 		if (this.plugin.settings.debugging) console.log("Processor: Start processing");
 
 		if (this.plugin.commands.isEverythingSetup()) {
 			new Notice("Vikunja Plugin: Found problems in plugin. Have to be fixed first. Syncing is stopped.");
 			if (this.plugin.settings.debugging) console.log("Processor: Found problems in plugin. Have to be fixed first.");
+			this.syncing = false;
 			return;
 		}
 
@@ -54,18 +65,25 @@ class Processor {
 			//this.plugin.userObject = await new User(this.app, this.plugin).getUser();
 		}
 
-		if (this.plugin.settings.debugging) console.log("Processor: Reset automaton");
-		this.automaton = new Automaton(this.app, this.plugin, this);
+		try {
+			if (this.plugin.settings.debugging) console.log("Processor: Reset automaton");
+			this.automaton = new Automaton(this.app, this.plugin, this);
 
-		await this.automaton.run();
+			await this.automaton.run();
 
-		switch (this.automaton.status) {
-			case AutomatonStatus.ERROR:
-				new Notice("Error while syncing tasks");
-				break;
-			case AutomatonStatus.FINISHED:
-				new Notice("Finished syncing tasks");
-				break;
+			switch (this.automaton.status) {
+				case AutomatonStatus.ERROR:
+					new Notice("Error while syncing tasks");
+					break;
+				case AutomatonStatus.FINISHED:
+					new Notice("Finished syncing tasks");
+					break;
+			}
+		} catch (e) {
+			console.error("Processor: Error during sync", e);
+			new Notice("Error while syncing tasks");
+		} finally {
+			this.syncing = false;
 		}
 
 		if (this.plugin.settings.debugging) console.log("Processor: End processing");
@@ -99,13 +117,11 @@ class Processor {
 	}
 
 	getTaskContent(task: PluginTask): string {
-		const content: string = this.taskFormatter.format(task.task);
-		return `${content} `;
+		return this.taskFormatter.format(task.task);
 	}
 
 	getTaskContentWithoutVikunja(task: PluginTask): string {
-		const content: string = this.taskFormatter.formatRaw(task.task);
-		return `${content} `;
+		return this.taskFormatter.formatRaw(task.task);
 	}
 
 	async updateTasksOnStartup() {
@@ -254,7 +270,34 @@ class Processor {
 	async pushTasksFromVaultToVikunja(localTasks: PluginTask[], vikunjaTasks: ModelsTask[]) {
 		const tasksToPushToVikunja = localTasks.filter(task => !vikunjaTasks.find(vikunjaTask => vikunjaTask.id === task.task.id));
 		if (this.plugin.settings.debugging) console.log("Step CreateTask: Pushing tasks to Vikunja and updates in Vault")
-		await Promise.all(tasksToPushToVikunja.map(task => this.createTaskAndUpdateToVault(task)));
+
+		// Pushed sequentially, deliberately.
+		//
+		// Promise.all raced on shared state: every task calls getOrCreateLabels, which
+		// checks an in-memory labelsMap, so N concurrent tasks sharing a tag all saw it
+		// missing and each created its own copy. That produced N duplicate labels, and
+		// the losers' lookups returned undefined and threw, which rejected the whole
+		// Promise.all and abandoned every task that had not finished yet. The symptom
+		// was a different random subset syncing on each run.
+		//
+		// A per-task try/catch also means one bad task no longer kills the batch.
+		const failures: {title: string, error: string}[] = [];
+		for (const task of tasksToPushToVikunja) {
+			try {
+				await this.createTaskAndUpdateToVault(task);
+			} catch (error: any) {
+				const title = task.task.title ?? "(untitled)";
+				failures.push({title, error: error?.message ?? String(error)});
+				console.error("Step CreateTask: Failed to push task", title, error);
+			}
+		}
+
+		if (failures.length > 0) {
+			new Notice(`Vikunja Plugin: ${failures.length} of ${tasksToPushToVikunja.length} task(s) failed to sync. See console.`);
+			console.error("Step CreateTask: Failed tasks", failures);
+		} else if (this.plugin.settings.debugging) {
+			console.log(`Step CreateTask: Pushed ${tasksToPushToVikunja.length} task(s) successfully`);
+		}
 	}
 
 	async pullTasksFromVikunjaToVault(localTasks: PluginTask[], vikunjaTasks: ModelsTask[]) {
@@ -326,9 +369,8 @@ function compareModelTasks(local: ModelsTask, vikunja: ModelsTask): boolean {
 	const priority = local.priority === vikunja.priority;
 	const status = local.done === vikunja.done;
 	const doneAt = local.doneAt === vikunja.doneAt;
-	const updated = local.updated === vikunja.updated;
 
-	return title && description && dueDate && labels && priority && status && doneAt && updated;
+	return title && description && dueDate && labels && priority && status && doneAt;
 }
 
 export {Processor, compareModelTasks};

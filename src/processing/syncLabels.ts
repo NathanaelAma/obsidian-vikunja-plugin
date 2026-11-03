@@ -43,16 +43,23 @@ class SyncLabels implements IAutomatonSteps {
 	private async createLabels(localTasks: PluginTask[]): Promise<PluginTask[]> {
 		if (this.plugin.settings.debugging) console.log("Step SyncLabels: Creating labels in Vikunja if not existing.");
 
-		return await Promise.all(localTasks
-			.map(async task => {
-					if (!task.task) throw new Error("Task is not defined");
-					if (!task.task.labels) return task;
+		// Sequential, for the same reason as the other two loops: getOrCreateLabels
+		// decides what to create from an in-memory map, so running it concurrently
+		// across tasks means every task sharing a tag sees it missing and creates its
+		// own copy. Nine tasks tagged #sync produced nine duplicate "sync" labels.
+		const result: PluginTask[] = [];
+		for (const task of localTasks) {
+			if (!task.task) throw new Error("Task is not defined");
+			if (!task.task.labels) {
+				result.push(task);
+				continue;
+			}
 
-					task.task.labels = await this.plugin.labelsApi.getOrCreateLabels(task.task.labels);
-					if (this.plugin.settings.debugging) console.log("Step SyncLabels: Preparing labels for local tasks for vikunja update", task);
-					return task;
-				}
-			));
+			task.task.labels = await this.plugin.labelsApi.getOrCreateLabels(task.task.labels);
+			if (this.plugin.settings.debugging) console.log("Step SyncLabels: Preparing labels for local tasks for vikunja update", task);
+			result.push(task);
+		}
+		return result;
 	}
 }
 

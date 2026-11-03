@@ -1,7 +1,7 @@
 import {IAutomatonSteps, StepsOutput} from "./automaton";
 import {PluginTask} from "../vaultSearcher/vaultSearcher";
 import {ModelsTask} from "../../vikunja_sdk";
-import {App} from "obsidian";
+import {App, Notice} from "obsidian";
 import VikunjaPlugin from "../../main";
 import {Processor} from "./processor";
 
@@ -90,12 +90,29 @@ class UpdateTasks implements IAutomatonSteps {
 	private async updateTasksInVikunja(updateTasks: PluginTask[]) {
 		if (this.plugin.settings.debugging) console.log("Step UpdateTask: Update tasks in vikunja");
 
-		await Promise.all(updateTasks.map(async task => {
-			const answer = await this.plugin.tasksApi.updateTask(task)
-			if (this.plugin.settings.debugging) console.log("Step UpdateTask: Updated task in Vikunja", task, answer);
-			task.task = answer;
-			await this.updateTasksInVault([task]);
-		}));
+		// Sequential: updateTask calls addLabelToTask -> getOrCreateLabels, which picks
+		// what to create from an in-memory map. Run concurrently, tasks sharing a tag
+		// each create their own copy, which is how nine tasks tagged #sync produced
+		// nine duplicate "sync" labels. This path runs on every sync after the first,
+		// so leaving it concurrent would reintroduce the duplicates indefinitely.
+		const failures: {title: string, error: string}[] = [];
+		for (const task of updateTasks) {
+			try {
+				const answer = await this.plugin.tasksApi.updateTask(task)
+				if (this.plugin.settings.debugging) console.log("Step UpdateTask: Updated task in Vikunja", task, answer);
+				task.task = answer;
+				await this.updateTasksInVault([task]);
+			} catch (error: any) {
+				const title = task.task.title ?? "(untitled)";
+				failures.push({title, error: error?.message ?? String(error)});
+				console.error("Step UpdateTask: Failed to update task", title, error);
+			}
+		}
+
+		if (failures.length > 0) {
+			new Notice(`Vikunja Plugin: ${failures.length} of ${updateTasks.length} task update(s) failed. See console.`);
+			console.error("Step UpdateTask: Failed updates", failures);
+		}
 	}
 
 	private async updateTasksInVault(updateTasks: PluginTask[]) {
