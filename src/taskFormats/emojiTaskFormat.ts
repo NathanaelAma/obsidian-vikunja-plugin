@@ -29,7 +29,11 @@ const REGEX = {
 		REMOVE_CHECKBOX_WITH_INDENTATION: /^([ \t]*)?(-|\*)\s+\[(x|X| )\]\s/,
 		REMOVE_VIKUNJA_LINK: /\[link\]\(.*?\)/,
 	},
-	ALL_TAGS: /#[\w\u4e00-\u9fa5-]+/g,
+	// A tag must start the line or follow whitespace, matching Obsidian's own tag
+	// rules. Without the prefix guard, the fragment in a URL such as
+	// `https://example.com/docs#section-3` is harvested as a tag and mints a junk
+	// label in Vikunja on every sync.
+	ALL_TAGS: /(?:^|\s)#[\w\u4e00-\u9fa5-]+/g,
 	TASK_CHECKBOX_CHECKED: /- \[(x|X)\] /,
 	TASK_INDENTATION: /^(\s{2,}|\t)(-|\*)\s+\[(x|X| )\]/,
 	TAB_INDENTATION: /^(\t+)/,
