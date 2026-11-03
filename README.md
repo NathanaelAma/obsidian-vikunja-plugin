@@ -2,6 +2,10 @@
 
 **Currently status**: Known issues with sync changes from vikunja documented in [#13](https://github.com/Heiss/obsidian-vikunja-plugin/issues/13)
 
+> **About this fork**
+>
+> This fork collects fixes that were never merged upstream. The upstream repo has not been updated since 2024. The fixes make the plugin work with current Vikunja (2.4.0+). See [Fork changes](#fork-changes) for details.
+
 This **unofficial** plugin connects Obsidian and [Vikunja](https://vikunja.io). Vikunja is a todo-App and task manager
 that helps you to organize your life. It can be used as a self-host replacement for [todoist.com](todoist.com/).
 Synchronize your tasks with your Vikunja instance back and forth. It holds a lot of settings to
@@ -109,3 +113,27 @@ npm run gen-sdk
 ## API Documentation
 
 See https://github.com/obsidianmd/obsidian-api
+
+## Fork changes
+
+This fork (v1.0.20) is based on upstream 1.0.19. It adds the following:
+
+**Merged upstream pull requests**
+
+- [Heiss/obsidian-vikunja-plugin#25](https://github.com/Heiss/obsidian-vikunja-plugin/pull/25) / [#26](https://github.com/Heiss/obsidian-vikunja-plugin/pull/26) (Carlos Otero): stop the infinite sync loop. The `updated` timestamp is no longer part of task equality, a sync can no longer start while one is already running, and errors no longer leave the plugin stuck "syncing".
+- [Heiss/obsidian-vikunja-plugin#27](https://github.com/Heiss/obsidian-vikunja-plugin/pull/27) (Twan Nooitmeer): use `GET /tasks` instead of `GET /tasks/all`, which Vikunja 2.4.0 removed. Without this, every sync fails with a misleading 401 or 400. Synced task lines also no longer end with a trailing space.
+- [Heiss/obsidian-vikunja-plugin#28](https://github.com/Heiss/obsidian-vikunja-plugin/pull/28) (Twan Nooitmeer): write vault timestamps in real UTC. Before this, users outside UTC had changes made in Vikunja silently reverted on the next sync.
+
+**Bug fixes ported from [twannooitmeer/obsidian-vikunja-plugin](https://github.com/twannooitmeer/obsidian-vikunja-plugin/tree/fix/vikunja-2.4.0-compat)**
+
+- Tasks and labels are now created and updated one at a time. This stops duplicate labels and random partial syncs, and one failing task no longer aborts the whole batch; failures are summarised in a notice.
+- "Reset cache and reindex tasks" no longer throws on tasks that have not been synced yet.
+- Errors when attaching labels are now classified. "Already attached" (HTTP 400) is logged only in debug mode, and real failures such as 401 permission errors are logged loudly.
+- URL fragments (`https://example.com/page#section`) are no longer read as tags.
+
+**Setup notes for Vikunja 2.4+**
+
+- **CORS must be enabled** on the Vikunja server (`VIKUNJA_CORS_ENABLE=true`, with `VIKUNJA_CORS_ORIGINS` including `app://obsidian.md`, or `*`). Obsidian sends requests from `app://obsidian.md`, so without CORS every request is blocked. This usually shows up as "could not resolve project".
+- **API tokens** need more than the tasks/projects/labels permission groups. Attaching labels needs `tasks_labels`, and listing project views needs `projects_views`. The simplest option is to grant all groups.
+- **After upgrading from 1.0.19**, run the command "Reset cache and reindex tasks" once. Caches written by older versions hold timestamps that are offset by your UTC offset.
+
